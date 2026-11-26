@@ -1,0 +1,7 @@
+out/
+input/
+__pycache__/
+*.pyc
+data/*
+!data/coingecko_list.json
+!data/coingecko_markets.json
