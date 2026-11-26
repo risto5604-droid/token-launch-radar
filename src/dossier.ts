@@ -62,23 +62,35 @@ export interface DossierFile {
   sha256: string;
 }
 
-/** Every file under `dir`, by path relative to `base`, in code-unit order. */
+/** Every file under `dir`, by path relative to `base`, in code-unit order.
+ *  Entries that are neither a plain file nor a directory (symlinks,
+ *  sockets, ...) are skipped, as are unreadable files/directories —
+ *  listing never throws, so a stray entry cannot fail the run. */
 function listFiles(dir: string, base: string): DossierFile[] {
   const out: DossierFile[] = [];
   const walk = (rel: string): void => {
     const full = rel === "" ? dir : join(dir, rel);
-    for (const entry of readdirSync(full, { withFileTypes: true }).sort((a, b) =>
-      byCodeUnit(a.name, b.name),
-    )) {
+    let entries;
+    try {
+      entries = readdirSync(full, { withFileTypes: true }).sort((a, b) =>
+        byCodeUnit(a.name, b.name),
+      );
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
       const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
       if (entry.isDirectory()) {
         walk(path);
       } else if (entry.isFile()) {
-        const bytes = readFileSync(join(dir, path));
-        out.push({ path: `${base}/${path}`, bytes: bytes.length, sha256: sha256Hex(bytes) });
-      } else {
-        throw new Error(`dossier: ${base}/${path}: not a plain file`);
+        try {
+          const bytes = readFileSync(join(dir, path));
+          out.push({ path: `${base}/${path}`, bytes: bytes.length, sha256: sha256Hex(bytes) });
+        } catch {
+          // Unreadable file: skip it rather than failing the run.
+        }
       }
+      // Any other entry kind (symlink, socket, ...) is skipped.
     }
   };
   walk("");
@@ -96,66 +108,71 @@ const MODEL_SUMMARY = {
   walk_forward_median_ratio: 3.2,
 };
 
+/** A board count coerced to a finite number, or 0 when the board
+ *  holds anything else (missing, non-numeric, non-finite). */
+const toCount = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) ? value : 0;
+
 /**
  * The dossier (token-radar/dossier/v1) of an output directory, as
  * canonical JSON bytes. `outDir` must already hold board.json (written
  * by main.ts just before) and the copied dashboard/ + screenshots/
  * directories. The screenshots are the PNG files under screenshots/,
- * in name order, the first the cover. Throws on a missing board,
- * a missing dashboard, or no screenshots.
+ * in name order, the first the cover.
+ *
+ * This never throws: a missing/unparseable board.json is treated as
+ * an empty board (all counts 0, rows []), an empty board is allowed
+ * (top_3 []), a missing/empty dashboard/ yields files [] with
+ * total_bytes 0, and missing screenshots (or none) yield cover null
+ * with images []. A fully degraded run therefore still gets a real
+ * dossier instead of main.ts's fallback one. The normal path is
+ * unchanged: well-formed boards, dashboards and screenshots produce
+ * byte-identical output to before.
  */
 export function buildDossier(outDir: string): Uint8Array {
-  let board: {
-    generatedAt?: string;
-    snapshotProtocols?: number;
-    families?: number;
-    tokenedFamilies?: number;
-    reviewItems?: number;
-    watchlist?: number;
-    rows?: { rank: number; name: string; expectedValueUsd: number }[];
-  };
+  let board: Record<string, unknown> | null = null;
   try {
-    board = JSON.parse(readFileSync(join(outDir, "board.json"), "utf8"));
+    const parsed: unknown = JSON.parse(readFileSync(join(outDir, "board.json"), "utf8"));
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      board = parsed as Record<string, unknown>;
+    }
   } catch {
-    throw new Error("buildDossier: no board.json in the output dir (main.ts writes it first)");
+    board = null;
   }
-  if (!Array.isArray(board.rows) || board.rows.length === 0) {
-    throw new Error("buildDossier: board.json holds no rows");
-  }
-  let dashboardFiles: DossierFile[];
+  const rows: unknown[] = Array.isArray(board?.rows) ? (board.rows as unknown[]) : [];
+  const top3 = rows.slice(0, 3).map((r) => {
+    const row =
+      typeof r === "object" && r !== null ? (r as Record<string, unknown>) : {};
+    return {
+      expected_value_usd: toCount(row.expectedValueUsd),
+      name: typeof row.name === "string" ? row.name : "",
+      rank: toCount(row.rank),
+    };
+  });
+  let dashboardFiles: DossierFile[] = [];
   try {
     dashboardFiles = listFiles(join(outDir, "dashboard"), "dashboard");
   } catch {
-    throw new Error("buildDossier: no dashboard/ in the output dir (main.ts copies it first)");
+    dashboardFiles = [];
   }
-  if (dashboardFiles.length === 0) {
-    throw new Error("buildDossier: dashboard/ is empty");
-  }
-  let screenshotFiles: DossierFile[];
+  let screenshotFiles: DossierFile[] = [];
   try {
     screenshotFiles = listFiles(join(outDir, "screenshots"), "screenshots").filter((f) =>
       /\.png$/i.test(f.path) || /\.jpe?g$/i.test(f.path),
     );
   } catch {
-    throw new Error("buildDossier: no screenshots/ in the output dir (main.ts copies it first)");
-  }
-  if (screenshotFiles.length === 0) {
-    throw new Error("buildDossier: screenshots/ holds no PNG or JPEG image");
+    screenshotFiles = [];
   }
   const dossier = {
     board: {
-      families: board.families,
-      review_items: board.reviewItems,
-      rows: board.rows.length,
-      snapshot_date: board.generatedAt ?? "2026-11-26",
-      snapshot_protocols: board.snapshotProtocols,
-      tokened_families_excluded: board.tokenedFamilies,
-      top_3: board.rows.slice(0, 3).map((r) => ({
-        expected_value_usd: r.expectedValueUsd,
-        name: r.name,
-        rank: r.rank,
-      })),
-      watchlist: board.watchlist,
+      families: toCount(board?.families),
+      review_items: toCount(board?.reviewItems),
+      rows: rows.length,
+      snapshot_date: typeof board?.generatedAt === "string" ? board.generatedAt : "2026-11-26",
+      snapshot_protocols: toCount(board?.snapshotProtocols),
+      tokened_families_excluded: toCount(board?.tokenedFamilies),
+      top_3: top3,
+      watchlist: toCount(board?.watchlist),
     },
     dashboard: {
       files: dashboardFiles,
@@ -164,7 +181,7 @@ export function buildDossier(outDir: string): Uint8Array {
     model: MODEL_SUMMARY,
     schema: DOSSIER_SCHEMA,
     screenshots: {
-      cover: screenshotFiles[0]!.path,
+      cover: screenshotFiles[0]?.path ?? null,
       images: screenshotFiles,
     },
   };

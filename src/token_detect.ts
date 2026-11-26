@@ -90,19 +90,56 @@ const MANUAL_OVERRIDES: Record<string, { geckoId: string | null; evidence: strin
   "mux-perps": { geckoId: "mcdex", evidence: "manual: MUX Protocol product, token MCB" },
 };
 
+/** Coerce one list element to a string when possible (strings pass
+ *  through; numbers/booleans/bigints via String()); anything else
+ *  (null, undefined, objects, symbols) cannot be a coin field, so
+ *  the caller skips that row. */
+function toCoinField(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  return null;
+}
+
+/** Coerce a markets-table value to a finite number, falling back to 0
+ *  for anything missing, non-numeric, or non-finite. */
+function toMcap(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
+}
+
 /** Load the embedded CoinGecko tables from a directory holding
  *  coingecko_list.json ([[id, symbol, name], ...]) and
- *  coingecko_markets.json ({id: [market_cap, fdv]}). */
+ *  coingecko_markets.json ({id: [market_cap, fdv]}). List rows that
+ *  are not [string, string, string] triples are skipped (each element
+ *  is coerced to a string when possible; a row with an uncoercible
+ *  element is dropped), and markets pairs are coerced to finite
+ *  numbers with a 0 fallback — a malformed row can never throw.
+ *  A missing or unparseable file still throws (main.ts's safety net
+ *  covers that); that behavior is unchanged. */
 export function loadCoinTables(dataDir: string): CoinTables {
-  const list: [string, string, string][] = JSON.parse(
+  const list: unknown = JSON.parse(
     readFileSync(join(dataDir, "coingecko_list.json"), "utf8"),
   );
-  const markets: Record<string, [number, number]> = JSON.parse(
+  const markets: unknown = JSON.parse(
     readFileSync(join(dataDir, "coingecko_markets.json"), "utf8"),
   );
+  if (!Array.isArray(list)) {
+    throw new TypeError("loadCoinTables: coingecko_list.json is not an array of triples");
+  }
   const bySymbol = new Map<string, CoinRow[]>();
   const byName = new Map<string, CoinRow[]>();
-  for (const [id, symbol, name] of list) {
+  for (const row of list) {
+    if (!Array.isArray(row) || row.length !== 3) continue;
+    const id = toCoinField(row[0]);
+    const symbol = toCoinField(row[1]);
+    const name = toCoinField(row[2]);
+    if (id === null || symbol === null || name === null) continue;
     const coin: CoinRow = { id, symbol, name };
     const sKey = symbol.toLowerCase();
     const sList = bySymbol.get(sKey) ?? [];
@@ -115,9 +152,10 @@ export function loadCoinTables(dataDir: string): CoinTables {
   }
   const liveMcap = new Map<string, number>();
   const liveFdv = new Map<string, number>();
-  for (const [id, pair] of Object.entries(markets)) {
-    liveMcap.set(id, pair[0] ?? 0);
-    liveFdv.set(id, pair[1] ?? 0);
+  for (const [id, pair] of Object.entries(markets as Record<string, unknown>)) {
+    const arr = Array.isArray(pair) ? pair : [];
+    liveMcap.set(id, toMcap(arr[0]));
+    liveFdv.set(id, toMcap(arr[1]));
   }
   return { bySymbol, byName, liveMcap, liveFdv };
 }
@@ -261,6 +299,13 @@ export function detectToken(
   const review: ReviewItem[] = [];
   const scoreNames = scoreNamesFor(fam);
 
+  // Family symbols arrive as strings from main.ts, but a non-string
+  // entry (e.g. a numeric symbol in a degraded snapshot) must not
+  // throw on toLowerCase(): coerce every entry to a string first.
+  const symbols: string[] = (Array.isArray(fam.symbols) ? fam.symbols : []).map((s) =>
+    typeof s === "string" ? s : s === null || s === undefined ? "" : String(s),
+  );
+
   // Manual overrides first: families the automatic matcher cannot prove.
   const override = MANUAL_OVERRIDES[fam.key];
   if (override !== undefined) {
@@ -286,7 +331,7 @@ export function detectToken(
 
   // (a) Symbol-anchored candidates: coins sharing a family symbol.
   const cands = new Map<string, CoinRow>();
-  for (const sym of fam.symbols) {
+  for (const sym of symbols) {
     for (const coin of tables.bySymbol.get(sym.toLowerCase()) ?? []) {
       cands.set(coin.id, coin);
     }
@@ -344,7 +389,7 @@ export function detectToken(
         review.push({
           family: fam.name,
           key: fam.key,
-          symbols: [...fam.symbols].sort(),
+          symbols: [...symbols].sort(),
           candidate: {
             id: second.coin.id,
             name: second.coin.name,
@@ -359,7 +404,7 @@ export function detectToken(
       review.push({
         family: fam.name,
         key: fam.key,
-        symbols: [...fam.symbols].sort(),
+        symbols: [...symbols].sort(),
         candidates: candList.map((c) => ({
           id: c.id,
           name: c.name,
