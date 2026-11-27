@@ -18,6 +18,7 @@ FDV comes from the CoinGecko markets table (markets[id] = [mcap, fdv]).
 """
 import json
 import math
+import re
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
@@ -33,6 +34,17 @@ MODEL_SUMMARY = {
     "launch_odds_auc": 0.70,
     "launch_odds_brier": 0.221,
 }
+
+
+def strip_urls(text: str) -> str:
+    """Strip http(s) URLs from a text (the dev gate forbids http(s)
+    addresses in the dashboard output). A trailing sentence period is
+    kept; the URL is replaced by the words 'the official site'."""
+    return re.sub(
+        r"https?://\S+",
+        lambda m: "the official site" + ("." if m.group(0).endswith(".") else ""),
+        text,
+    )
 
 
 def money(n: float) -> str:
@@ -116,14 +128,18 @@ def main() -> None:
             "implied_fdv_hi80_usd": r["impliedFdvHi80Usd"],
             "launch_probability": r["launchProbability"],
             "expected_value_usd": r["expectedValueUsd"],
+            # Round 3: no http(s) addresses in the dashboard output
+            # (dev gate) — the plan's url/twitter are dropped and any
+            # URL inside a step text is replaced, not linked.
             "plan": {
                 "template": plan["template"],
                 "tvl_tier": plan["tvl_tier"],
                 "age_days": plan["age_days"],
                 "chains": plan["chains"],
-                "url": plan["url"],
-                "twitter": plan["twitter"],
-                "steps": plan["steps"],
+                "steps": [
+                    {"text": strip_urls(s["text"]), "evidence": s["evidence"]}
+                    for s in plan["steps"]
+                ],
             },
             "comps": nearest_comps(r, comps_by_cat, comps),
         })
@@ -143,6 +159,8 @@ def main() -> None:
     (OUT).mkdir(parents=True, exist_ok=True)
     (OUT / "data.json").write_text(data_json + "\n", encoding="utf-8")
     (OUT / "app.js").write_text(APP_JS, encoding="utf-8")
+    # Round 3: the dev gate requires a .css file in dashboard/.
+    (OUT / "style.css").write_text(STYLE_CSS, encoding="utf-8")
     (OUT / "index.html").write_text(
         INDEX_HTML.replace("__DATA_JSON__", data_json), encoding="utf-8"
     )
@@ -154,48 +172,49 @@ def main() -> None:
            for r in rows[:1]])
 
 
+STYLE_CSS = """:root { color-scheme: light; }
+body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0 auto;
+  max-width: 1100px; padding: 24px 16px 64px; color: #1a1a1a; background: #fff; }
+h1 { font-size: 28px; margin: 0 0 4px; }
+.sub { color: #555; margin: 0 0 16px; }
+.honest { background: #f6f6f2; border: 1px solid #ddd; border-radius: 8px;
+  padding: 12px 16px; margin: 0 0 20px; font-size: 14px; line-height: 1.5; }
+.honest b { color: #000; }
+.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin: 0 0 12px; }
+.filters label { font-size: 13px; color: #444; display: flex; flex-direction: column; gap: 2px; }
+.filters input, .filters select { padding: 6px 8px; font-size: 14px; border: 1px solid #bbb; border-radius: 4px; }
+.count { font-size: 13px; color: #555; margin: 0 0 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { padding: 7px 8px; border-bottom: 1px solid #e3e3e3; text-align: right; white-space: nowrap; }
+th:first-child, td:first-child, th:nth-child(2), td:nth-child(2), th:nth-child(3), td:nth-child(3) { text-align: left; }
+th { cursor: pointer; user-select: none; background: #fafafa; position: sticky; top: 0; }
+th:hover { background: #f0f0f0; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: #f7f7ff; }
+.num { font-variant-numeric: tabular-nums; }
+.interval { color: #666; font-size: 12px; display: block; }
+#detail { border: 1px solid #bbb; border-radius: 8px; padding: 16px 20px; margin: 0 0 20px; background: #fbfbff; display: none; }
+#detail h2 { margin: 0 0 4px; font-size: 20px; }
+#detail .stats { display: flex; flex-wrap: wrap; gap: 24px; margin: 12px 0; }
+#detail .stat b { display: block; font-size: 18px; }
+#detail .stat span { font-size: 12px; color: #555; }
+#detail ol { margin: 8px 0; padding-left: 20px; line-height: 1.55; }
+#detail .ev { font-size: 12px; color: #666; }
+#detail table { font-size: 13px; margin-top: 8px; }
+#detail th { cursor: default; position: static; }
+#detail tbody tr { cursor: default; }
+#detail tbody tr:hover { background: none; }
+.close { float: right; cursor: pointer; border: 1px solid #bbb; background: #fff; border-radius: 4px; padding: 2px 8px; }
+a { color: #1a4fd6; }
+"""
+
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Token Launch Radar — 739 pre-token protocols</title>
-<style>
-  :root { color-scheme: light; }
-  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0 auto;
-    max-width: 1100px; padding: 24px 16px 64px; color: #1a1a1a; background: #fff; }
-  h1 { font-size: 28px; margin: 0 0 4px; }
-  .sub { color: #555; margin: 0 0 16px; }
-  .honest { background: #f6f6f2; border: 1px solid #ddd; border-radius: 8px;
-    padding: 12px 16px; margin: 0 0 20px; font-size: 14px; line-height: 1.5; }
-  .honest b { color: #000; }
-  .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin: 0 0 12px; }
-  .filters label { font-size: 13px; color: #444; display: flex; flex-direction: column; gap: 2px; }
-  .filters input, .filters select { padding: 6px 8px; font-size: 14px; border: 1px solid #bbb; border-radius: 4px; }
-  .count { font-size: 13px; color: #555; margin: 0 0 8px; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { padding: 7px 8px; border-bottom: 1px solid #e3e3e3; text-align: right; white-space: nowrap; }
-  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2), th:nth-child(3), td:nth-child(3) { text-align: left; }
-  th { cursor: pointer; user-select: none; background: #fafafa; position: sticky; top: 0; }
-  th:hover { background: #f0f0f0; }
-  tbody tr { cursor: pointer; }
-  tbody tr:hover { background: #f7f7ff; }
-  .num { font-variant-numeric: tabular-nums; }
-  .interval { color: #666; font-size: 12px; display: block; }
-  #detail { border: 1px solid #bbb; border-radius: 8px; padding: 16px 20px; margin: 0 0 20px; background: #fbfbff; display: none; }
-  #detail h2 { margin: 0 0 4px; font-size: 20px; }
-  #detail .stats { display: flex; flex-wrap: wrap; gap: 24px; margin: 12px 0; }
-  #detail .stat b { display: block; font-size: 18px; }
-  #detail .stat span { font-size: 12px; color: #555; }
-  #detail ol { margin: 8px 0; padding-left: 20px; line-height: 1.55; }
-  #detail .ev { font-size: 12px; color: #666; }
-  #detail table { font-size: 13px; margin-top: 8px; }
-  #detail th { cursor: default; position: static; }
-  #detail tbody tr { cursor: default; }
-  #detail tbody tr:hover { background: none; }
-  .close { float: right; cursor: pointer; border: 1px solid #bbb; background: #fff; border-radius: 4px; padding: 2px 8px; }
-  a { color: #1a4fd6; }
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <h1>Token Launch Radar</h1>
@@ -292,9 +311,6 @@ APP_JS = """// Token Launch Radar dashboard logic (static, no network).
     var el = document.getElementById("detail");
     if (!r) { el.style.display = "none"; el.innerHTML = ""; return; }
     var p = r.plan;
-    var links = "";
-    if (p.url) links += '<a href="' + esc(p.url) + '">official site</a>';
-    if (p.twitter) links += (links ? " &middot; " : "") + '<a href="https://x.com/' + esc(p.twitter) + '">@' + esc(p.twitter) + "</a>";
     var steps = p.steps.map(function (s) {
       return "<li>" + esc(s.text) + ' <span class="ev">[' + s.evidence.join(", ") + "]</span></li>";
     }).join("");
@@ -307,8 +323,7 @@ APP_JS = """// Token Launch Radar dashboard logic (static, no network).
     el.innerHTML = '<button class="close" id="d-close">Close</button>' +
       "<h2>#" + r.rank + " " + esc(r.name) + "</h2>" +
       "<div>" + esc(r.category) + " &middot; TVL " + money(r.tvl) + " (" + esc(p.tvl_tier) + ") &middot; " +
-      r.chains + " chains (" + esc(p.chains.join(", ")) + ") &middot; listed " + age + " ago" +
-      (links ? " &middot; " + links : "") + "</div>" +
+      r.chains + " chains (" + esc(p.chains.join(", ")) + ") &middot; listed " + age + " ago</div>" +
       '<div class="stats">' +
       '<div class="stat"><b>' + money(r.implied_fdv_usd) + "</b><span>implied FDV</span></div>" +
       '<div class="stat"><b>' + money(r.implied_fdv_lo80_usd) + " &ndash; " + money(r.implied_fdv_hi80_usd) + "</b><span>80% interval (&times;10.2)</span></div>" +

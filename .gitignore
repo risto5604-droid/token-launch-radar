@@ -5,3 +5,5 @@ __pycache__/
 data/*
 !data/coingecko_list.json
 !data/coingecko_markets.json
+!data/backup-protocols.json
+!data/farm_steps.json

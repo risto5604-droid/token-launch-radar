@@ -66,9 +66,6 @@
     var el = document.getElementById("detail");
     if (!r) { el.style.display = "none"; el.innerHTML = ""; return; }
     var p = r.plan;
-    var links = "";
-    if (p.url) links += '<a href="' + esc(p.url) + '">official site</a>';
-    if (p.twitter) links += (links ? " &middot; " : "") + '<a href="https://x.com/' + esc(p.twitter) + '">@' + esc(p.twitter) + "</a>";
     var steps = p.steps.map(function (s) {
       return "<li>" + esc(s.text) + ' <span class="ev">[' + s.evidence.join(", ") + "]</span></li>";
     }).join("");
@@ -81,8 +78,7 @@
     el.innerHTML = '<button class="close" id="d-close">Close</button>' +
       "<h2>#" + r.rank + " " + esc(r.name) + "</h2>" +
       "<div>" + esc(r.category) + " &middot; TVL " + money(r.tvl) + " (" + esc(p.tvl_tier) + ") &middot; " +
-      r.chains + " chains (" + esc(p.chains.join(", ")) + ") &middot; listed " + age + " ago" +
-      (links ? " &middot; " + links : "") + "</div>" +
+      r.chains + " chains (" + esc(p.chains.join(", ")) + ") &middot; listed " + age + " ago</div>" +
       '<div class="stats">' +
       '<div class="stat"><b>' + money(r.implied_fdv_usd) + "</b><span>implied FDV</span></div>" +
       '<div class="stat"><b>' + money(r.implied_fdv_lo80_usd) + " &ndash; " + money(r.implied_fdv_hi80_usd) + "</b><span>80% interval (&times;10.2)</span></div>" +
